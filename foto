@@ -1,0 +1,409 @@
+import React, { useState, useRef } from 'react';
+
+// Menggunakan inline SVG untuk memastikan kompatibilitas dan performa tanpa import eksternal
+const UploadIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="17 8 12 3 7 8"></polyline>
+    <line x1="12" y1="3" x2="12" y2="15"></line>
+  </svg>
+);
+
+const DownloadIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>
+);
+
+const ImageIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+    <polyline points="21 15 16 10 5 21"></polyline>
+  </svg>
+);
+
+const LoaderIcon = () => (
+  <svg className="animate-spin" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="2" x2="12" y2="6"></line>
+    <line x1="12" y1="18" x2="12" y2="22"></line>
+    <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+    <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+    <line x1="2" y1="12" x2="6" y2="12"></line>
+    <line x1="18" y1="12" x2="22" y2="12"></line>
+    <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+    <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+  </svg>
+);
+
+const SparklesIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v18"></path>
+    <path d="M3 12h18"></path>
+    <path d="m18.36 5.64-12.72 12.72"></path>
+    <path d="m5.64 5.64 12.72 12.72"></path>
+  </svg>
+);
+
+export default function App() {
+  const [prompt, setPrompt] = useState('');
+  const [uploadedImage, setUploadedImage] = useState(null);
+  const [imageMimeType, setImageMimeType] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0); // Progress tracker 0-6
+  
+  // State untuk 6 hasil gambar
+  const [results, setResults] = useState(Array(6).fill({ status: 'idle', url: null }));
+  const fileInputRef = useRef(null);
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result;
+        setPreviewUrl(dataUrl);
+        
+        // Memisahkan metadata dan data base64
+        const mime = dataUrl.split(';')[0].split(':')[1];
+        const base64 = dataUrl.split(',')[1];
+        
+        setImageMimeType(mime);
+        setUploadedImage(base64);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const triggerFileInput = () => {
+    fileInputRef.current.click();
+  };
+
+  const generateSingleImage = async (userPrompt, imgData, mime) => {
+    // Memaksa prompt untuk bergaya "close up" dan profesional
+    const basePrompt = userPrompt ? userPrompt.trim() : "A cinematic subject";
+    const enhancedPrompt = `${basePrompt}, extreme close up shot, professional photography, portrait framing, 8k resolution, highly detailed, photorealistic, cinematic lighting, focused`;
+
+    const payload = {
+      contents: [{
+        role: "user",
+        parts: [
+          { text: enhancedPrompt }
+        ]
+      }],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+        imageConfig: { aspectRatio: "3:4" } // Ukuran close up / portrait yang ideal
+      }
+    };
+
+    // Menambahkan gambar jika pengguna mengunggahnya (Image-to-Image)
+    if (imgData && mime) {
+      payload.contents[0].parts.push({
+        inlineData: { mimeType: mime, data: imgData }
+      });
+    }
+
+    const apiKey = ""; // API key dikosongkan agar ditangani oleh environment internal
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent?key=${apiKey}`;
+
+    // Implementasi exponential backoff untuk menghindari rate limits
+    let retries = 3;
+    let delay = 1500;
+
+    while (retries > 0) {
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.status === 429) {
+          retries--;
+          await new Promise(r => setTimeout(r, delay));
+          delay *= 2;
+          continue;
+        }
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const result = await response.json();
+        const part = result?.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        
+        if (part) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        } else {
+          throw new Error('Tidak ada gambar dalam respons API');
+        }
+      } catch (e) {
+        if (retries === 1) throw e;
+        retries--;
+        await new Promise(r => setTimeout(r, delay));
+        delay *= 2;
+      }
+    }
+  };
+
+  const handleGenerate = async () => {
+    if (!uploadedImage && !prompt) return;
+
+    setIsGenerating(true);
+    setGenerationProgress(0);
+    
+    // Set 6 slot ke status loading
+    setResults(Array(6).fill({ status: 'loading', url: null }));
+
+    // Mengeksekusi secara batch (2 gambar per batch) untuk menghindari rate limit
+    const batchGenerate = async (indices) => {
+      await Promise.all(indices.map(async (index) => {
+        try {
+          const imageUrl = await generateSingleImage(prompt, uploadedImage, imageMimeType);
+          setResults(prev => {
+            const next = [...prev];
+            next[index] = { status: 'success', url: imageUrl };
+            return next;
+          });
+          setGenerationProgress(prev => prev + 1);
+        } catch (error) {
+          console.error(`Gagal menghasilkan gambar ke-${index + 1}:`, error);
+          setResults(prev => {
+            const next = [...prev];
+            next[index] = { status: 'error', url: null };
+            return next;
+          });
+          setGenerationProgress(prev => prev + 1);
+        }
+      }));
+    };
+
+    // Eksekusi berurutan per batch
+    await batchGenerate([0, 1]);
+    await batchGenerate([2, 3]);
+    await batchGenerate([4, 5]);
+
+    setIsGenerating(false);
+  };
+
+  const handleDownload = (dataUrl, index) => {
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = `AI-CloseUp-Result-${index + 1}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const removeUploadedImage = () => {
+    setUploadedImage(null);
+    setImageMimeType(null);
+    setPreviewUrl(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30">
+      {/* Header */}
+      <header className="border-b border-white/5 bg-slate-900/50 backdrop-blur-md sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-indigo-500/20 rounded-xl text-indigo-400">
+              <ImageIcon />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
+                LuminaStudio
+              </h1>
+              <p className="text-xs text-slate-400 font-medium">Professional Close-Up Generator</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          
+          { }
+          <div className="lg:col-span-4 space-y-6">
+            <div className="bg-slate-900/40 border border-white/5 rounded-2xl p-6 shadow-2xl shadow-black/20">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">1</span>
+                Unggah Gambar (Opsional)
+              </h2>
+              
+              <div 
+                onClick={previewUrl ? undefined : triggerFileInput}
+                className={`relative group flex flex-col items-center justify-center w-full h-48 border-2 border-dashed rounded-xl transition-all duration-300 overflow-hidden ${
+                  previewUrl 
+                    ? 'border-indigo-500/50 bg-slate-900' 
+                    : 'border-slate-700 hover:border-indigo-500 hover:bg-slate-800/50 cursor-pointer'
+                }`}
+              >
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  onChange={handleImageUpload} 
+                  accept="image/png, image/jpeg, image/webp" 
+                  className="hidden" 
+                />
+                
+                {previewUrl ? (
+                  <>
+                    <img src={previewUrl} alt="Preview" className="w-full h-full object-cover opacity-60 group-hover:opacity-30 transition-opacity" />
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); removeUploadedImage(); }}
+                      className="absolute inset-0 m-auto w-max h-max px-4 py-2 bg-red-500/80 hover:bg-red-500 text-white text-sm font-medium rounded-lg opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm shadow-xl"
+                    >
+                      Hapus Gambar
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center text-slate-400 group-hover:text-indigo-400 transition-colors">
+                    <UploadIcon />
+                    <p className="mt-3 text-sm font-medium">Klik untuk mengunggah gambar</p>
+                    <p className="mt-1 text-xs opacity-60">PNG, JPG, atau WEBP</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-slate-900/40 border border-white/5 rounded-2xl p-6 shadow-2xl shadow-black/20">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">2</span>
+                Pengaturan Prompt
+              </h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Deskripsi Tambahan (Opsional)
+                  </label>
+                  <textarea
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    placeholder="Contoh: Buat menjadi gaya lukisan cat minyak klasik..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all resize-none h-28"
+                  />
+                </div>
+                
+                <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 text-indigo-400">
+                      <SparklesIcon />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-indigo-300">Auto Close-Up Aktif</h4>
+                      <p className="text-xs text-indigo-200/60 mt-1 leading-relaxed">
+                        Sistem akan otomatis mengoptimalkan prompt Anda untuk menghasilkan gambar potret <i>close up</i> berkualitas tinggi.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleGenerate}
+                  disabled={isGenerating || (!uploadedImage && !prompt)}
+                  className={`w-full py-4 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all duration-300 ${
+                    isGenerating 
+                      ? 'bg-slate-800 text-slate-400 cursor-not-allowed' 
+                      : (!uploadedImage && !prompt)
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 translate-y-0 hover:-translate-y-0.5'
+                  }`}
+                >
+                  {isGenerating ? (
+                    <>
+                      <LoaderIcon />
+                      Memproses ({generationProgress}/6)...
+                    </>
+                  ) : (
+                    <>
+                      <SparklesIcon />
+                      Mulai Generate
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {}
+          <div className="lg:col-span-8">
+            <div className="bg-slate-900/40 border border-white/5 rounded-2xl p-6 shadow-2xl shadow-black/20 min-h-[calc(100vh-12rem)]">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  Hasil Generasi (6 Pilihan)
+                </h2>
+                {isGenerating && (
+                  <span className="text-xs font-medium px-3 py-1 bg-indigo-500/20 text-indigo-400 rounded-full animate-pulse">
+                    Menganalisa & Menggambar...
+                  </span>
+                )}
+              </div>
+
+              {/* Grid 6 Gambar */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {results.map((result, index) => (
+                  <div 
+                    key={index} 
+                    className="aspect-[3/4] rounded-xl overflow-hidden relative group bg-slate-950 border border-slate-800"
+                  >
+                    {result.status === 'idle' && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-700">
+                        <ImageIcon />
+                        <span className="text-xs mt-2 font-medium">Slot {index + 1}</span>
+                      </div>
+                    )}
+
+                    {result.status === 'loading' && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-800/50 animate-pulse">
+                        <div className="text-indigo-400 mb-3">
+                          <LoaderIcon />
+                        </div>
+                        <div className="w-1/2 h-2 bg-slate-700 rounded-full overflow-hidden">
+                          <div className="w-full h-full bg-indigo-500 animate-[pulse_1.5s_ease-in-out_infinite]"></div>
+                        </div>
+                      </div>
+                    )}
+
+                    {result.status === 'error' && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-red-400/80 bg-red-500/5 p-4 text-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mb-2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                        <span className="text-xs font-medium">Gagal memproses gambar.</span>
+                      </div>
+                    )}
+
+                    {result.status === 'success' && result.url && (
+                      <>
+                        <img 
+                          src={result.url} 
+                          alt={`Generated Close-Up ${index + 1}`} 
+                          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                        />
+                        
+                        {/* Overlay Download */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
+                          <button
+                            onClick={() => handleDownload(result.url, index)}
+                            className="w-full py-2.5 bg-white text-slate-900 rounded-lg font-bold text-sm flex items-center justify-center gap-2 hover:bg-indigo-50 transition-colors shadow-lg"
+                          >
+                            <DownloadIcon />
+                            Unduh Gambar
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+            </div>
+          </div>
+          
+        </div>
+      </main>
+    </div>
+  );
+}
